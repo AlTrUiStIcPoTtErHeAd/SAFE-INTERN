@@ -1,0 +1,30 @@
+# --- Core Web App ---
+streamlit
+
+# --- CrewAI (Multi-Agent Framework) ---
+crewai
+langchain
+pydantic
+python-dotenv
+
+# --- Machine Learning ---
+scikit-learn
+numpy
+pandas
+
+# --- NLP ---
+nltk
+spacy
+
+# --- PDF Processing ---
+PyMuPDF
+
+# --- Web Scraping ---
+requests
+beautifulsoup4
+
+# --- Utilities ---
+tqdm
+
+# --- Gemini API ---
+google-generativeai

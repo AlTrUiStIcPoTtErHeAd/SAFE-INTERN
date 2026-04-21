@@ -1,51 +1,75 @@
-# agents/planner_agent.py
-"""
-Planner agent for SAFE-INTERN.
+"""Planner/orchestrator that remains stable with optional dependencies."""
 
-Responsibilities:
-- Decide which analysis agents should run
-- Execute selected agents deterministically
-- Return structured agent outputs (NO scoring here)
-"""
+from __future__ import annotations
 
-from typing import Dict, Any, List
+from typing import Any, Dict
 
-from agents import company_agent
-from agents import payment_agent
-from agents import behavior_agent
 from agents import ml_agent
+from utils.pattern_detector import detect_scam_patterns
+
+try:
+    import crewai  # noqa: F401
+
+    CREWAI_AVAILABLE = True
+except Exception:
+    CREWAI_AVAILABLE = False
+
+try:
+    import google.generativeai as genai  # noqa: F401
+
+    GEMINI_AVAILABLE = True
+except Exception:
+    GEMINI_AVAILABLE = False
+
+try:
+    import spacy  # noqa: F401
+
+    SPACY_AVAILABLE = True
+except Exception:
+    SPACY_AVAILABLE = False
 
 
-def decide_agents(intake_data: Dict[str, Any]) -> List[str]:
-    agents_to_run = ["company", "behavior", "ml"]
+def _risk_label(score: int) -> str:
+    """Convert numeric risk score to user-facing label."""
+    if score < 20:
+        return "Safe"
+    if score < 40:
+        return "Low Risk"
+    if score < 65:
+        return "Medium Risk"
+    if score < 85:
+        return "High Risk"
+    return "Scam Likely"
 
-    if intake_data.get("payment_mentions"):
-        agents_to_run.append("payment")
 
-    return agents_to_run
+def _combine_scores(ml_result: Dict[str, Any], rule_result: Dict[str, Any]) -> Dict[str, int]:
+    """Combine ML and rule scores into final score and confidence."""
+    ml_percent = int(ml_result.get("risk_percent", 0)) if ml_result.get("ml_used") else 0
+    rule_score = int(rule_result.get("rule_score", 0))
+    final_score = max(0, min(100, int(round(ml_percent * 0.6 + rule_score * 0.4))))
+    confidence = min(100, max(15, int(round(45 + abs(ml_percent - 50) * 0.7 + abs(rule_score - 50) * 0.5))))
+    return {
+        "ml_percent": ml_percent,
+        "rule_score": rule_score,
+        "final_score": final_score,
+        "confidence": confidence,
+    }
 
 
-def run_planner(intake_schema) -> Dict[str, Any]:
-    if hasattr(intake_schema, "to_dict"):
-        intake_data = intake_schema.to_dict()
-    elif hasattr(intake_schema, "dict"):
-        intake_data = intake_schema.dict()
-    else:
-        intake_data = intake_schema
-
-    selected_agents = decide_agents(intake_data)
-    results: Dict[str, Any] = {}
-
-    if "company" in selected_agents:
-        results["company"] = company_agent.run_company_agent(intake_data)
-
-    if "payment" in selected_agents:
-        results["payment"] = payment_agent.run_payment_agent(intake_data)
-
-    if "behavior" in selected_agents:
-        results["behavior"] = behavior_agent.run_behavior_agent(intake_data)
-
-    if "ml" in selected_agents:
-        results["ml"] = ml_agent.run_ml_analysis(intake_data)
-
-    return results
+def run_planner(intake_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Run full planner flow with robust optional dependency guards."""
+    normalized = intake_data if isinstance(intake_data, dict) else {"clean_text": str(intake_data or "")}
+    text = str(normalized.get("clean_text", "") or "")
+    ml_result = ml_agent.run_ml_analysis({"clean_text": text})
+    pattern_result = detect_scam_patterns(text)
+    score_payload = _combine_scores(ml_result, pattern_result)
+    return {
+        "ml": ml_result,
+        "patterns": pattern_result,
+        "scoring": {**score_payload, "label": _risk_label(score_payload["final_score"])},
+        "integrations": {
+            "crewai_enabled": False if not CREWAI_AVAILABLE else False,
+            "gemini_available": GEMINI_AVAILABLE,
+            "spacy_available": SPACY_AVAILABLE,
+        },
+    }

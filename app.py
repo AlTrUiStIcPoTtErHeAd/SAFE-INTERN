@@ -1,347 +1,178 @@
+from __future__ import annotations
+
+import json
+from typing import Dict, List
+
 import streamlit as st
-from dotenv import load_dotenv
-import os
 
-load_dotenv()
+from agents.planner_agent import run_planner
+from utils.file_parser import parse_uploaded_file
 
-st.set_page_config(
-    page_title="SAFE-INTERN | AI Risk Analyzer",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+st.set_page_config(page_title="SAFE-INTERN", page_icon="🛡️", layout="wide")
+
+st.markdown(
+    """
+<style>
+    .card { padding: 1rem; border-radius: 14px; border: 1px solid #33415544; background: linear-gradient(135deg, #0f172a08, #0284c708); margin-bottom: 0.8rem; }
+    .badge { padding: 5px 12px; border-radius: 999px; font-weight: 700; display: inline-block; }
+    .safe { background:#dcfce7; color:#166534; }
+    .low { background:#fef9c3; color:#854d0e; }
+    .medium { background:#fde68a; color:#92400e; }
+    .high { background:#fecaca; color:#991b1b; }
+    .scam { background:#b91c1c; color:#fff; }
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
-from intake.input_router import route_input
-from intake.intake_agent import run_intake
-from agents.planner_agent import run_planner
-from utils.risk_engine import calculate_risk
-from utils.explanation_engine import generate_explanation
-from utils.guardrails import apply_guardrails
-from database.db_init import init_db
-init_db()
 
-# --------------------------------------------------
-# CUSTOM CSS & STYLING
-# --------------------------------------------------
+def _badge_style(label: str) -> str:
+    return {
+        "Safe": "badge safe",
+        "Low Risk": "badge low",
+        "Medium Risk": "badge medium",
+        "High Risk": "badge high",
+        "Scam Likely": "badge scam",
+    }.get(label, "badge low")
 
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    
-    /* Modern Dark Theme - Vercel/shadcn inspired */
-    :root {
-        --bg-color: #0F172A; /* Slate 900 */
-        --card-bg: #1E293B;  /* Slate 800 */
-        --text-primary: #F1F5F9; /* Slate 100 */
-        --text-secondary: #94A3B8; /* Slate 400 */
-        --accent-primary: #3B82F6; /* Blue 500 */
-        --border-color: #334155; /* Slate 700 */
-        
-        --risk-low: #10B981;   /* Emerald 500 */
-        --risk-med: #F59E0B;   /* Amber 500 */
-        --risk-high: #EF4444;  /* Red 500 */
-    }
 
-    .stApp {
-        background-color: var(--bg-color);
-        font-family: 'Inter', sans-serif;
-    }
+def _flatten_patterns(found: Dict[str, List[str]]) -> List[str]:
+    rows = []
+    for key, values in found.items():
+        if values:
+            rows.append(f"{key.replace('_', ' ').title()}: {', '.join(values[:3])}")
+    return rows
 
-    h1, h2, h3, h4, h5, h6 {
-        color: var(--text-primary) !important;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-    }
-    
-    p, li, span, label {
-        color: var(--text-secondary) !important;
-    }
 
-    /* Modern Card Style */
-    .card {
-        background-color: var(--card-bg);
-        border: 1px solid var(--border-color);
-        border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        margin-bottom: 1.5rem;
-        transition: all 0.2s ease;
-    }
-    
-    .card:hover {
-        border-color: var(--accent-primary);
-    }
+def _safe_tips() -> List[str]:
+    return [
+        "Never pay any internship registration fee, deposit, or processing charge.",
+        "Verify recruiter identity using official company website and domain email.",
+        "Do not share Aadhaar, PAN, passport, bank info, OTP, or UPI PIN.",
+        "Reject offers with no interview and unrealistic salary promises.",
+        "Avoid pressure tactics like 'confirm now', 'limited seats', or 'pay immediately'.",
+    ]
 
-    /* Primary Button */
-    .stButton>button {
-        width: 100%;
-        background-color: var(--accent-primary);
-        color: white !important;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 8px;
-        font-weight: 600;
-        transition: all 0.2s;
-    }
-    
-    .stButton>button:hover {
-        background-color: #2563EB; /* Blue 600 */
-        box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.3);
-        transform: translateY(-1px);
-    }
 
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        height: 3rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        color: var(--accent-primary) !important;
-        border-bottom-color: var(--accent-primary) !important;
-    }
-    
-    /* Risk Badge */
-    .risk-badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.875rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-</style>
-""", unsafe_allow_html=True)
-
-# --------------------------------------------------
-# SIDEBAR
-# --------------------------------------------------
+st.title("🛡️ SAFE-INTERN")
+st.caption("Internship scam detection with combined ML + rules, built for Python 3.11.")
 
 with st.sidebar:
-    st.title("🛡️ SAFE-INTERN")
-    st.markdown("### AI-Powered Internship Safety")
-    st.info(
-        "This system uses a multi-agent AI architecture to analyze details "
-        "and detect potential red flags in internship offers."
+    st.markdown("### Platform Status")
+    st.info("CrewAI is intentionally disabled as optional.")
+    st.info("Gemini is optional and not required for core analysis.")
+    st.markdown("### Example Scam Message")
+    st.code("URGENT: Pay ₹1999 registration fee now via UPI to confirm internship seat.")
+    st.markdown("### Example Safe Message")
+    st.code("Interview scheduled via official company email. No payment requested.")
+
+tab_msg, tab_file, tab_indicators, tab_ml = st.tabs(
+    ["Message Analysis", "PDF / Offer Letter Upload", "Scam Indicators Found", "ML Risk Breakdown"]
+)
+
+if "input_text" not in st.session_state:
+    st.session_state.input_text = ""
+if "analysis" not in st.session_state:
+    st.session_state.analysis = {}
+
+with tab_msg:
+    typed = st.text_area(
+        "Paste internship message/email text",
+        value=st.session_state.input_text,
+        height=250,
+        placeholder="Paste suspicious text, offer letter email, chat screenshot text, or job description...",
     )
-    
-    st.markdown("---")
-    st.markdown("### How it works")
-    st.markdown("1. **Intake**: AI parses your input.")
-    st.markdown("2. **Analysis**: Specialized agents check company, payments, and behavior.")
-    st.markdown("3. **Risk Engine**: Calculates a safety score.")
-    st.markdown("4. **Advisor**: Provides clear, actionable advice.")
-    
-    st.markdown("---")
-    st.caption("v2.0 | Powered by Gemini Pro")
+    st.session_state.input_text = typed
+    st.markdown('<div class="card">Supported: pasted messages, emails, offer texts, OCR text.</div>', unsafe_allow_html=True)
 
-
-# --------------------------------------------------
-# MAIN LAYOUT
-# --------------------------------------------------
-
-col_title, col_logo = st.columns([3, 1])
-with col_title:
-    st.title("Internship Risk Analyzer")
-    st.markdown("#### Verify opportunities before you commit. Fast, private, and AI-driven.")
-
-st.markdown("---")
-
-# --------------------------------------------------
-# INPUT SECTION
-# --------------------------------------------------
-
-input_container = st.container()
-
-# --------------------------------------------------
-# INPUT SECTION (TABS)
-# --------------------------------------------------
-
-st.markdown("<br>", unsafe_allow_html=True)
-input_container = st.container()
-
-with input_container:
-    tab1, tab2, tab3 = st.tabs(["📝 Text / Email", "📄 PDF Document", "🔗 Website URL"])
-    
-    text_input = None
-    pdf_file = None
-    url_input = None
-
-    with tab1:
-        st.markdown("<br>", unsafe_allow_html=True)
-        text_input = st.text_area(
-            "Internship Description",
-            height=200,
-            placeholder="Paste the job description, email, or message here...",
-            label_visibility="collapsed"
-        )
-
-    with tab2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        pdf_file = st.file_uploader("Upload Offer Letter", type=["pdf"], label_visibility="collapsed")
-        if pdf_file:
-            pdf_file = pdf_file.read()
-
-    with tab3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        url_input = st.text_input("Internship Link", placeholder="https://example.com/internship", label_visibility="collapsed")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    # Centered Action Button
-    col_spacer_l, col_btn, col_spacer_r = st.columns([1, 2, 1])
-    with col_btn:
-        analyze = st.button("Analyze Risk", type="primary")
-
-# --------------------------------------------------
-# PROCESSING & RESULTS
-# --------------------------------------------------
-
-if analyze:
-    try:
-        progress_text = "Starting analysis engine..."
-        my_bar = st.progress(0, text=progress_text)
-
-        clean_text = route_input(
-            text_input=text_input,
-            pdf_file=pdf_file,
-            url=url_input
-        )
-        my_bar.progress(20, text="Parsing and structuring data with Gemini...")
-
-        intake_schema = run_intake(clean_text)
-        my_bar.progress(40, text="Deploying analysis agents...")
-
-        agent_results = run_planner(intake_schema)
-        my_bar.progress(70, text="Calculating risk factors...")
-
-        risk_result = calculate_risk(agent_results)
-        my_bar.progress(85, text="Generating safety report...")
-
-        explanation = generate_explanation(risk_result)
-        safe_output = apply_guardrails(explanation)
-        
-        my_bar.progress(100, text="Analysis complete!")
-        my_bar.empty()
-
-        # --------------------------------------------------
-        # DASHBOARD
-        # --------------------------------------------------
-
-        st.markdown("---")
-        st.subheader("📊 Analysis Report")
-
-        # Top Level Metrics
-        m1, m2, m3 = st.columns(3)
-        
-        score = safe_output["risk_score"]
-        category = safe_output["risk_category"]
-        
-        # Dynamic Coloring based on CSS variables
-        if score < 30:
-            score_color = "var(--risk-low)"
-            badge_bg = "rgba(16, 185, 129, 0.2)"
-            badge_text = "#10B981"
-        elif score < 60:
-            score_color = "var(--risk-med)"
-            badge_bg = "rgba(245, 158, 11, 0.2)"
-            badge_text = "#F59E0B"
+with tab_file:
+    upload = st.file_uploader(
+        "Upload txt/pdf/docx/image/eml",
+        type=["txt", "pdf", "docx", "png", "jpg", "jpeg", "webp", "eml"],
+    )
+    if upload:
+        parsed_text, meta = parse_uploaded_file(upload.name, upload.getvalue())
+        if meta.get("status") == "ok":
+            st.success(f"Parsed {meta.get('type', 'file')} successfully.")
+            st.session_state.input_text = parsed_text
+            st.text_area("Extracted text preview", parsed_text[:5000], height=220)
         else:
-            score_color = "var(--risk-high)"
-            badge_bg = "rgba(239, 68, 68, 0.2)"
-            badge_text = "#EF4444"
+            st.error(meta.get("message", "Could not parse the uploaded file."))
 
-        with m1:
-            st.markdown(
-                f"""
-                <div class="card" style="text-align: center;">
-                    <h3 style="margin:0; font-size: 0.9rem; text-transform: uppercase;">Risk Score</h3>
-                    <h1 style="margin:0; font-size: 4rem; color: {score_color}; line-height: 1.2;">
-                        {score}<span style="font-size: 1.5rem; color: var(--text-secondary);">/100</span>
-                    </h1>
-                </div>
-                """, unsafe_allow_html=True
-            )
-        
-        with m2:
-            st.markdown(
-                f"""
-                <div class="card" style="text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100%;">
-                    <h3 style="margin:0; font-size: 0.9rem; text-transform: uppercase;">Risk Level</h3>
-                    <div style="margin-top: 10px;">
-                        <span class="risk-badge" style="background-color: {badge_bg}; color: {badge_text};">
-                            {category}
-                        </span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True
-            )
+if st.button("Analyze Risk", type="primary"):
+    if not st.session_state.input_text.strip():
+        st.error("Please paste text or upload a supported file before analysis.")
+    else:
+        with st.spinner("Running scam risk analysis..."):
+            st.session_state.analysis = run_planner({"clean_text": st.session_state.input_text})
 
-        with m3:
-            agents_run = len(agent_results)
-            st.markdown(
-                f"""
-                <div class="card" style="text-align: center; display: flex; flex-direction: column; justify-content: center; height: 100%;">
-                    <h3 style="margin:0; font-size: 0.9rem; text-transform: uppercase;">Agents Active</h3>
-                    <h2 style="margin:0; margin-top: 5px; color: var(--text-primary);">{agents_run}</h2>
-                    <p style="margin:0; font-size: 0.8rem;">Specialized Analyzers</p>
-                </div>
-                """, unsafe_allow_html=True
-            )
+analysis = st.session_state.analysis
+if analysis:
+    ml_result = analysis.get("ml", {})
+    pattern_result = analysis.get("patterns", {})
+    scoring = analysis.get("scoring", {})
+    final_score = int(scoring.get("final_score", 0))
+    label = scoring.get("label", "Low Risk")
+    confidence = int(scoring.get("confidence", 20))
+    ml_percent = int(scoring.get("ml_percent", 0))
+    rule_score = int(scoring.get("rule_score", 0))
+    found_patterns = pattern_result.get("found_patterns", {})
+    reasons = pattern_result.get("reasons", [])
+    keyword_hits = pattern_result.get("keyword_hits", [])
 
-        # Main Content Grid
-        c1, c2 = st.columns([2, 1])
+    st.markdown("---")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Final Risk Score", f"{final_score}/100")
+    m1.progress(final_score / 100.0)
+    m2.metric("Confidence Score", f"{confidence}%")
+    m2.progress(confidence / 100.0)
+    m3.markdown(f"<span class='{_badge_style(label)}'>⚠ {label}</span>", unsafe_allow_html=True)
+    m3.caption("Final label from combined ML + rule scoring")
 
-        with c1:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("#### 🧠 Executive Summary")
-            st.write(safe_output["summary"])
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("#### 🔎 Key Findings")
-            
-            if not safe_output["explanations"]:
-                st.markdown("- ✅ **No specific risk indicators found.**")
-            else:
-                for item in safe_output["explanations"]:
-                    if "risk" in item.lower() or "alert" in item.lower() or "caution" in item.lower():
-                         st.markdown(f"- 🔴 {item}")
-                    else:
-                         st.markdown(f"- ℹ️ {item}")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Recommendations Section
-            if safe_output.get("recommendations"):
-                st.markdown(
-                    f"""
-                    <div class="card" style="border-left: 4px solid {score_color};">
-                        <h4 style="margin-top:0;">💡 Actionable Advice</h4>
-                    """, unsafe_allow_html=True
-                )
-                for rec in safe_output["recommendations"]:
-                    st.markdown(f"- {rec}")
-                st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("### Risk Meter")
+    st.progress(final_score / 100.0, text=f"{label} ({final_score}%)")
 
-        with c2:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown("#### 📌 Risk Breakdown")
-            for agent, s in safe_output["breakdown"].items():
-                st.markdown(f"**{agent.title()} Risk**")
-                # Normalize relative to max agent score approx 30
-                progress_val = min(s / 30.0, 1.0)
-                st.progress(progress_val)
-                st.caption(f"{s} points")
-            st.markdown('</div>', unsafe_allow_html=True)
+    with tab_indicators:
+        st.markdown("### Why this may be risky")
+        for reason in reasons[:8]:
+            st.warning(reason)
+        if not reasons:
+            st.success("No strong high-risk indicators detected by rule engine.")
+        flat_patterns = _flatten_patterns(found_patterns)
+        if flat_patterns:
+            st.markdown("### Highlighted scam keywords and patterns")
+            for row in flat_patterns:
+                st.write(f"- {row}")
+        if keyword_hits:
+            st.info(f"Keyword hits: {', '.join(keyword_hits)}")
+        st.markdown("### How to stay safe")
+        for tip in _safe_tips():
+            st.write(f"- {tip}")
 
-    except Exception as e:
-        st.error("An error occurred during analysis.")
-        st.exception(e)
+    with tab_ml:
+        st.markdown("### ML Risk Breakdown")
+        st.json(
+            {
+                "ml_used": ml_result.get("ml_used", False),
+                "model_type": ml_result.get("model_type", "N/A"),
+                "retrained": ml_result.get("retrained", False),
+                "ml_percent": ml_percent,
+                "rule_score": rule_score,
+                "integrations": analysis.get("integrations", {}),
+            }
+        )
+
+    report = {
+        "final_score": final_score,
+        "label": label,
+        "confidence": confidence,
+        "ml": ml_result,
+        "patterns": pattern_result,
+        "scoring": scoring,
+    }
+    st.download_button(
+        "Download Report",
+        data=json.dumps(report, indent=2),
+        file_name="safe_intern_report.json",
+        mime="application/json",
+    )

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import json
-from typing import Dict, List
+import re
+from typing import Any, Dict, List
 
 import streamlit as st
 
 from agents.planner_agent import run_planner
 from utils.file_parser import parse_uploaded_file
+from utils.report_generator import build_report_payload, render_report_json, render_text_summary
 
 st.set_page_config(page_title="SAFE-INTERN", page_icon="🛡️", layout="wide")
 
@@ -26,6 +27,15 @@ st.markdown(
 )
 
 
+RISK_ICON_MAP: Dict[str, str] = {
+    "Safe": "✅",
+    "Low Risk": "🟡",
+    "Medium Risk": "🟠",
+    "High Risk": "🔴",
+    "Scam Likely": "🚨",
+}
+
+
 def _badge_style(label: str) -> str:
     return {
         "Safe": "badge safe",
@@ -36,7 +46,28 @@ def _badge_style(label: str) -> str:
     }.get(label, "badge low")
 
 
+def _escape_markdown(value: str) -> str:
+    """Escape markdown special chars to safely render highlighted text."""
+    escaped = value.replace("\\", "\\\\")
+    for ch in ["*", "_", "`", "[", "]", "(", ")", "#", "+", "-", ".", "!"]:
+        escaped = escaped.replace(ch, f"\\{ch}")
+    return escaped
+
+
+def highlight_keywords(source_text: str, keyword_hits: List[str]) -> str:
+    """Highlight detected scam keywords in source text."""
+    if not source_text.strip() or not keyword_hits:
+        return _escape_markdown(source_text)
+    unique_terms = sorted({kw.strip() for kw in keyword_hits if kw.strip()}, key=len, reverse=True)
+    highlighted = source_text
+    for term in unique_terms:
+        pattern = re.compile(re.escape(term), flags=re.IGNORECASE)
+        highlighted = pattern.sub(lambda m: f"**⚠ {m.group(0)}**", highlighted)
+    return _escape_markdown(highlighted).replace("\\*\\*⚠ ", "**⚠ ").replace("\\*\\*", "**")
+
+
 def _flatten_patterns(found: Dict[str, List[str]]) -> List[str]:
+    """Render pattern dictionary as compact readable rows."""
     rows = []
     for key, values in found.items():
         if values:
@@ -45,6 +76,7 @@ def _flatten_patterns(found: Dict[str, List[str]]) -> List[str]:
 
 
 def _safe_tips() -> List[str]:
+    """Return practical anti-scam safety recommendations."""
     return [
         "Never pay any internship registration fee, deposit, or processing charge.",
         "Verify recruiter identity using official company website and domain email.",
@@ -54,8 +86,30 @@ def _safe_tips() -> List[str]:
     ]
 
 
-st.title("🛡️ SAFE-INTERN")
-st.caption("Internship scam detection with combined ML + rules, built for Python 3.11.")
+def _bucket_patterns(found_patterns: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """Group raw pattern keys into user-friendly indicator buckets."""
+    buckets = {
+        "Detected personal information": ["aadhaar_numbers", "pan_cards", "bank_accounts", "ifsc_codes", "otp_requests"],
+        "Suspicious payment indicators": ["upi_ids", "payment_requests", "qr_codes"],
+        "Suspicious urgency language": ["urgency_language", "unrealistic_salary"],
+        "Suspicious contact methods": ["telegram_usernames", "whatsapp_numbers", "public_domains", "fake_domains", "suspicious_urls"],
+    }
+    grouped: Dict[str, List[str]] = {}
+    for title, keys in buckets.items():
+        rows = []
+        for key in keys:
+            if key in found_patterns:
+                rows.append(f"{key.replace('_', ' ').title()}: {', '.join(found_patterns[key][:3])}")
+        grouped[title] = rows
+    return grouped
+
+
+st.markdown("## 🛡️ SAFE-INTERN")
+st.markdown("### AI-powered internship scam guard")
+st.write(
+    "Analyze pasted messages, emails, PDFs, screenshots, and offer letters using a resilient "
+    "ML + rule engine designed to fail safely when optional dependencies are unavailable."
+)
 
 with st.sidebar:
     st.markdown("### Platform Status")
@@ -121,12 +175,20 @@ if analysis:
     keyword_hits = pattern_result.get("keyword_hits", [])
 
     st.markdown("---")
+    card_cols = st.columns(5)
+    labels = ["Safe", "Low Risk", "Medium Risk", "High Risk", "Scam Likely"]
+    for idx, risk_label in enumerate(labels):
+        card_cols[idx].markdown(
+            f"<div class='card'><b>{RISK_ICON_MAP.get(risk_label, '⚠')} {risk_label}</b></div>",
+            unsafe_allow_html=True,
+        )
+
     m1, m2, m3 = st.columns(3)
     m1.metric("Final Risk Score", f"{final_score}/100")
     m1.progress(final_score / 100.0)
     m2.metric("Confidence Score", f"{confidence}%")
     m2.progress(confidence / 100.0)
-    m3.markdown(f"<span class='{_badge_style(label)}'>⚠ {label}</span>", unsafe_allow_html=True)
+    m3.markdown(f"<span class='{_badge_style(label)}'>{RISK_ICON_MAP.get(label, '⚠')} {label}</span>", unsafe_allow_html=True)
     m3.caption("Final label from combined ML + rule scoring")
 
     st.markdown("### Risk Meter")
@@ -145,34 +207,58 @@ if analysis:
                 st.write(f"- {row}")
         if keyword_hits:
             st.info(f"Keyword hits: {', '.join(keyword_hits)}")
+
+        grouped = _bucket_patterns(found_patterns)
+        for group_title, items in grouped.items():
+            st.markdown(f"### {group_title}")
+            if items:
+                for item in items:
+                    st.write(f"- {item}")
+            else:
+                st.caption("No indicators in this section.")
+
+        with st.expander("Raw extracted text (with highlighted scam keywords)"):
+            highlighted = highlight_keywords(st.session_state.input_text[:6000], keyword_hits)
+            st.markdown(highlighted or "_No extracted text available._")
+
         st.markdown("### How to stay safe")
         for tip in _safe_tips():
             st.write(f"- {tip}")
 
     with tab_ml:
         st.markdown("### ML Risk Breakdown")
-        st.json(
-            {
-                "ml_used": ml_result.get("ml_used", False),
-                "model_type": ml_result.get("model_type", "N/A"),
-                "retrained": ml_result.get("retrained", False),
-                "ml_percent": ml_percent,
-                "rule_score": rule_score,
-                "integrations": analysis.get("integrations", {}),
-            }
-        )
+        ml_breakdown: Dict[str, Any] = {
+            "ml_used": ml_result.get("ml_used", False),
+            "model_type": ml_result.get("model_type", "N/A"),
+            "retrained": ml_result.get("retrained", False),
+            "ml_percent": ml_percent,
+            "rule_score": rule_score,
+            "integrations": analysis.get("integrations", {}),
+        }
+        st.json(ml_breakdown)
 
-    report = {
-        "final_score": final_score,
-        "label": label,
-        "confidence": confidence,
-        "ml": ml_result,
-        "patterns": pattern_result,
-        "scoring": scoring,
-    }
+    report = build_report_payload(
+        source_text=st.session_state.input_text,
+        ml_result=ml_result,
+        pattern_result=pattern_result,
+        scoring=scoring,
+        integrations=analysis.get("integrations", {}),
+    )
     st.download_button(
-        "Download Report",
-        data=json.dumps(report, indent=2),
+        "Download JSON Report",
+        data=render_report_json(report),
         file_name="safe_intern_report.json",
         mime="application/json",
     )
+    st.download_button(
+        "Download Text Summary",
+        data=render_text_summary(report),
+        file_name="safe_intern_summary.txt",
+        mime="text/plain",
+    )
+
+st.markdown("---")
+st.caption(
+    "Safety disclaimer: SAFE-INTERN provides risk guidance, not legal or financial advice. "
+    "Always verify recruiter identity through official channels."
+)

@@ -186,12 +186,12 @@ def run_ml_analysis(intake: Dict[str, str]) -> Dict[str, object]:
             retrained = True
             features = vectorizer.transform([text])
             probability = float(model.predict_proba(features)[0][1])
-    except Exception as exc:
-        return {
-            "ml_used": False,
-            "error": f"Model prediction failed: {exc}",
-            "fallback": "Rule-based detection only",
-        }
+        except Exception as exc:
+            return {
+                "ml_used": False,
+                "error": f"Model prediction failed: {exc}",
+                "fallback": "Rule-based detection only",
+            }
 
     risk_percent = max(0, min(100, int(round(probability * 100))))
     return {

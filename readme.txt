@@ -111,20 +111,19 @@ http://localhost:8501
 ## Screenshots
 
 ### Home Dashboard
-![Home Dashboard](Screenshots/home.png)
+![Home Dashboard](./Screenshots/home.png)
 
 ### Low Risk Detection
-![Low Risk Detection](Screenshots/low_risk_detection.png)
+![Low Risk Detection](./Screenshots/low_risk_detection.png)
 
 ### High Risk Detection
-![High Risk Detection](Screenshots/high_risk_detection.png)
+![High Risk Detection](./Screenshots/high_risk_detection.png)
 
 ### ML Risk Breakdown
-![ML Risk Breakdown](Screenshots/ml_risk_breakdown.png)
+![ML Risk Breakdown](./Screenshots/ml_risk_breakdown.png)
 
 ### Scam Indicators Found
-![Scam Indicators Found](Screenshots/scam_indicators_found.png)
-
+![Scam Indicators Found](./Screenshots/scam_indicators_found.png)
 ⸻
 
 🔍 Scam Patterns Detected

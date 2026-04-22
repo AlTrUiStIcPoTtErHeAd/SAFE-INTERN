@@ -108,17 +108,22 @@ http://localhost:8501
 
 ⸻
 
-📸 Screenshots
+## Screenshots
 
-Home Screen
+### Home Dashboard
+![Home Dashboard](Screenshots/home.png)
 
-High Risk Scam Detection
+### Low Risk Detection
+![Low Risk Detection](Screenshots/low_risk_detection.png)
 
-Low Risk Internship Detection
+### High Risk Detection
+![High Risk Detection](Screenshots/high_risk_detection.png)
 
-ML Risk Breakdown
+### ML Risk Breakdown
+![ML Risk Breakdown](Screenshots/ml_risk_breakdown.png)
 
-Scam Indicators Found
+### Scam Indicators Found
+![Scam Indicators Found](Screenshots/scam_indicators_found.png)
 
 ⸻
 
